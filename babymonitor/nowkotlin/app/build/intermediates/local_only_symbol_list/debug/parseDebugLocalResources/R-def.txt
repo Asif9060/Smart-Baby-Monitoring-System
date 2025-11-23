@@ -1,0 +1,33 @@
+R_DEF: Internal format may change without notice
+local
+color background
+color onBackground
+color onPrimary
+color onSecondary
+color onSurface
+color primary
+color primaryVariant
+color secondary
+color secondaryVariant
+color surface
+drawable ic_launcher_foreground
+id halfHeightGuide
+id loadStreamButton
+id loadingIndicator
+id statusText
+id streamContainer
+id streamWebView
+id urlInput
+id urlInputLayout
+layout activity_main
+string app_name
+string connect
+string invalid_url
+string pull_to_refresh
+string status_connected
+string status_error
+string status_idle
+string status_loading
+string stream_url_hint
+style Theme.NowEsp32Cam
+xml network_security_config

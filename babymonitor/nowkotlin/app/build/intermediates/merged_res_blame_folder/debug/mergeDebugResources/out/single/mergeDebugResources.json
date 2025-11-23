@@ -1,0 +1,18 @@
+[
+    {
+        "merged": "C:\\Users\\Asif Foisal\\.gradle\\daemon\\9.0-milestone-1\\com.example.nowkotlin.app-debug-41:\\drawable_ic_launcher_foreground.xml.flat",
+        "source": "C:\\Users\\Asif Foisal\\.gradle\\daemon\\9.0-milestone-1\\com.example.nowkotlin.app-main-43:\\drawable\\ic_launcher_foreground.xml"
+    },
+    {
+        "merged": "com.example.nowkotlin.app-debug-41:/layout_activity_main.xml.flat",
+        "source": "com.example.nowkotlin.app-main-43:/layout/activity_main.xml"
+    },
+    {
+        "merged": "C:\\Users\\Asif Foisal\\.gradle\\daemon\\9.0-milestone-1\\com.example.nowkotlin.app-debug-41:\\xml_network_security_config.xml.flat",
+        "source": "C:\\Users\\Asif Foisal\\.gradle\\daemon\\9.0-milestone-1\\com.example.nowkotlin.app-main-43:\\xml\\network_security_config.xml"
+    },
+    {
+        "merged": "C:\\Users\\Asif Foisal\\.gradle\\daemon\\9.0-milestone-1\\com.example.nowkotlin.app-debug-41:\\layout_activity_main.xml.flat",
+        "source": "C:\\Users\\Asif Foisal\\.gradle\\daemon\\9.0-milestone-1\\com.example.nowkotlin.app-main-43:\\layout\\activity_main.xml"
+    }
+]

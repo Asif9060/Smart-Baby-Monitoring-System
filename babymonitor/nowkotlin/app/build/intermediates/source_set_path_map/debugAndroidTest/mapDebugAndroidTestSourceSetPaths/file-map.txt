@@ -1,0 +1,5 @@
+com.example.nowkotlin.test.app-jetified-core-1.6.1-0 C:\Users\Asif Foisal\.gradle\caches\9.0-milestone-1\transforms\41d54c0bde30e5df8cdc16d15be50744\transformed\jetified-core-1.6.1\res
+com.example.nowkotlin.test.app-androidTest-1 P:\Flutter Projects\nowkotlin\app\build\generated\res\resValues\androidTest\debug
+com.example.nowkotlin.test.app-mergeDebugAndroidTestResources-2 P:\Flutter Projects\nowkotlin\app\build\intermediates\incremental\debugAndroidTest\mergeDebugAndroidTestResources\merged.dir
+com.example.nowkotlin.test.app-mergeDebugAndroidTestResources-3 P:\Flutter Projects\nowkotlin\app\build\intermediates\incremental\debugAndroidTest\mergeDebugAndroidTestResources\stripped.dir
+com.example.nowkotlin.test.app-debugAndroidTest-4 P:\Flutter Projects\nowkotlin\app\build\intermediates\merged_res\debugAndroidTest\mergeDebugAndroidTestResources

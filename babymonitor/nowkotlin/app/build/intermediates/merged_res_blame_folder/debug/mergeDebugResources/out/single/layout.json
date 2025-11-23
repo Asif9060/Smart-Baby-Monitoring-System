@@ -1,0 +1,10 @@
+[
+    {
+        "merged": "C:\\Users\\Asif Foisal\\.gradle\\daemon\\9.0-milestone-1\\com.example.nowkotlin.app-mergeDebugResources-40:\\layout\\activity_main.xml",
+        "source": "C:\\Users\\Asif Foisal\\.gradle\\daemon\\9.0-milestone-1\\com.example.nowkotlin.app-main-43:\\layout\\activity_main.xml"
+    },
+    {
+        "merged": "com.example.nowkotlin.app-mergeDebugResources-40:/layout/activity_main.xml",
+        "source": "com.example.nowkotlin.app-main-43:/layout/activity_main.xml"
+    }
+]

@@ -1,0 +1,49 @@
+{
+  "project_info": {
+    "project_number": "136907588165",
+    "firebase_url": "https://babymonitor-9ea16-default-rtdb.firebaseio.com",
+    "project_id": "babymonitor-9ea16",
+    "storage_bucket": "babymonitor-9ea16.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:136907588165:android:1659f8f40c53c1a8c6992c",
+        "android_client_info": {
+          "package_name": "com.company.babymonitor"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBm8tca-B2hlM8-nJgbdzBwBHNyVDX7lxo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:136907588165:android:d1b175a70d721952c6992c",
+        "android_client_info": {
+          "package_name": "com.example.babymonitor"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBm8tca-B2hlM8-nJgbdzBwBHNyVDX7lxo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
