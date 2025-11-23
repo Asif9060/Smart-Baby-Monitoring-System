@@ -6,16 +6,49 @@ import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:http/http.dart' as http;
 
 import 'firebase_options.dart';
 
+final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+    FlutterLocalNotificationsPlugin();
+
 Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  runApp(const BabyMonitorApp());
+  try {
+    WidgetsFlutterBinding.ensureInitialized();
+    await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
+    const AndroidInitializationSettings initializationSettingsAndroid =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+
+    const InitializationSettings initializationSettings = InitializationSettings(
+      android: initializationSettingsAndroid,
+    );
+
+    await flutterLocalNotificationsPlugin.initialize(initializationSettings);
+
+    runApp(const BabyMonitorApp());
+  } catch (e, stack) {
+    runApp(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                'Initialization Error:\n$e\n\n$stack',
+                style: const TextStyle(color: Colors.red),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class BabyMonitorApp extends StatelessWidget {
@@ -32,7 +65,23 @@ class BabyMonitorApp extends StatelessWidget {
 
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Smart Baby Monitor',
+      title: 'Baby Monitoring',
+      builder: (context, child) {
+        ErrorWidget.builder = (FlutterErrorDetails details) {
+          return Scaffold(
+            body: Center(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  'Rendering Error:\n${details.exception}\n\n${details.stack}',
+                  style: const TextStyle(color: Colors.red),
+                ),
+              ),
+            ),
+          );
+        };
+        return child!;
+      },
       theme: baseTheme.copyWith(
         textTheme: GoogleFonts.plusJakartaSansTextTheme(baseTheme.textTheme),
         appBarTheme: baseTheme.appBarTheme.copyWith(
@@ -67,22 +116,233 @@ class BabyMonitorPage extends StatefulWidget {
 class _BabyMonitorPageState extends State<BabyMonitorPage> {
   static const String monitorPath = 'devices';
   DatabaseReference? _monitorRef;
-  late final Stream<DatabaseEvent> _monitorStream;
+  StreamSubscription<DatabaseEvent>? _monitorSubscription;
   String? _manualCameraUrl;
+  BabyMonitorReadings? _readings;
+  Object? _error;
+  bool _loading = true;
+  List<ActivityEvent> _todayActivities = [];
 
   @override
   void initState() {
     super.initState();
+    _requestPermissions();
+    _setupNotificationChannel();
+    _loadTodayActivities();
+    
     final override = widget.overrideStream;
     if (override != null) {
-      _monitorStream = override;
+      _subscribeToStream(override);
     } else {
       final ref = FirebaseDatabase.instance.ref(monitorPath);
       if (!kIsWeb) {
         ref.keepSynced(true);
       }
       _monitorRef = ref;
-      _monitorStream = ref.onValue;
+      _subscribeToStream(ref.onValue);
+    }
+  }
+
+  Future<void> _loadTodayActivities() async {
+    final prefs = await SharedPreferences.getInstance();
+    final today = DateTime.now();
+    final todayKey = '${today.year}-${today.month}-${today.day}';
+    final lastSavedDay = prefs.getString('last_activity_day');
+
+    // Reset if it's a new day
+    if (lastSavedDay != todayKey) {
+      await prefs.setString('last_activity_day', todayKey);
+      await prefs.remove('today_activities');
+      if (mounted) {
+        setState(() {
+          _todayActivities = [];
+        });
+      }
+      return;
+    }
+
+    // Load existing activities
+    final activitiesJson = prefs.getString('today_activities');
+    if (activitiesJson != null) {
+      try {
+        final List<dynamic> decoded = jsonDecode(activitiesJson);
+        if (mounted) {
+          setState(() {
+            _todayActivities = decoded
+                .map((json) => ActivityEvent.fromJson(json))
+                .toList();
+          });
+        }
+      } catch (e) {
+        debugPrint('Error loading activities: $e');
+      }
+    }
+  }
+
+  Future<void> _saveActivity(ActivityEvent event) async {
+    final prefs = await SharedPreferences.getInstance();
+    _todayActivities.insert(0, event); // Add to beginning
+    
+    // Keep only last 100 activities
+    if (_todayActivities.length > 100) {
+      _todayActivities = _todayActivities.sublist(0, 100);
+    }
+
+    final activitiesJson = jsonEncode(
+      _todayActivities.map((e) => e.toJson()).toList(),
+    );
+    await prefs.setString('today_activities', activitiesJson);
+
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  void _subscribeToStream(Stream<DatabaseEvent> stream) {
+    _monitorSubscription = stream.listen(
+      (event) {
+        if (event.snapshot.value == null) {
+          if (mounted) {
+            setState(() {
+              _loading = false;
+              _readings = null; // Empty state
+            });
+          }
+          return;
+        }
+
+        final newReadings = BabyMonitorReadings.fromSnapshot(
+          event.snapshot,
+          receivedAt: DateTime.now(),
+        );
+
+        if (_readings != null) {
+          _checkNotifications(newReadings, _readings!);
+        }
+
+        if (mounted) {
+          setState(() {
+            _readings = newReadings;
+            _loading = false;
+            _error = null;
+          });
+        }
+      },
+      onError: (error) {
+        if (mounted) {
+          setState(() {
+            _error = error;
+            _loading = false;
+          });
+        }
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _monitorSubscription?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _requestPermissions() async {
+    final AndroidFlutterLocalNotificationsPlugin? androidImplementation =
+        flutterLocalNotificationsPlugin.resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
+
+    await androidImplementation?.requestNotificationsPermission();
+  }
+
+  Future<void> _setupNotificationChannel() async {
+    const AndroidNotificationChannel channel = AndroidNotificationChannel(
+      'baby_monitor_alerts', // id
+      'Baby Monitor Alerts', // title
+      description: 'Notifications for motion, sound, and temperature alerts',
+      importance: Importance.max,
+      playSound: true,
+    );
+
+    final AndroidFlutterLocalNotificationsPlugin? androidImplementation =
+        flutterLocalNotificationsPlugin.resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
+
+    await androidImplementation?.createNotificationChannel(channel);
+  }
+
+  Future<void> _showNotification(String title, String body) async {
+    const AndroidNotificationDetails androidNotificationDetails =
+        AndroidNotificationDetails(
+          'baby_monitor_alerts',
+          'Baby Monitor Alerts',
+          channelDescription: 'Notifications for motion, sound, and temperature alerts',
+          importance: Importance.max,
+          priority: Priority.high,
+          ticker: 'ticker',
+          playSound: true,
+        );
+    const NotificationDetails notificationDetails = NotificationDetails(
+      android: androidNotificationDetails,
+    );
+    await flutterLocalNotificationsPlugin.show(
+      DateTime.now().millisecond,
+      title,
+      body,
+      notificationDetails,
+    );
+  }
+
+  void _checkNotifications(
+    BabyMonitorReadings current,
+    BabyMonitorReadings previous,
+  ) {
+    // Motion
+    if (current.motionDetected == true && previous.motionDetected != true) {
+      _showNotification(
+        'Motion Detected',
+        'Motion has been detected in the App.',
+      );
+      _saveActivity(ActivityEvent(
+        type: ActivityType.motion,
+        timestamp: DateTime.now(),
+        description: 'Motion detected in the nursery',
+      ));
+    }
+
+    // Sound
+    if (current.soundAlert == true && previous.soundAlert != true) {
+      _showNotification('Sound Alert', 'Loud noise detected in the App.');
+      _saveActivity(ActivityEvent(
+        type: ActivityType.sound,
+        timestamp: DateTime.now(),
+        description: 'Loud noise detected (${current.soundDecibels})',
+      ));
+    }
+
+    // Temperature
+    if (current.temperature != null) {
+      if (current.temperature! >= 28 &&
+          (previous.temperature == null || previous.temperature! < 28)) {
+        _showNotification(
+          'High Temperature',
+          'Sorrounding temperature is high (${current.temperatureCelsius}).',
+        );
+        _saveActivity(ActivityEvent(
+          type: ActivityType.temperature,
+          timestamp: DateTime.now(),
+          description: 'High temperature alert (${current.temperatureCelsius})',
+        ));
+      } else if (current.temperature! < 20 &&
+          (previous.temperature == null || previous.temperature! >= 20)) {
+        _showNotification(
+          'Low Temperature',
+          'Sorrounding temperature is low (${current.temperatureCelsius}).',
+        );
+        _saveActivity(ActivityEvent(
+          type: ActivityType.temperature,
+          timestamp: DateTime.now(),
+          description: 'Low temperature alert (${current.temperatureCelsius})',
+        ));
+      }
     }
   }
 
@@ -94,13 +354,13 @@ class _BabyMonitorPageState extends State<BabyMonitorPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Smart Baby Monitor',
+              'Baby Monitoring',
               style: Theme.of(
                 context,
               ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
             ),
             Text(
-              'Live feed & nursery vitals',
+              'Live feed & Baby vitals',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
@@ -121,28 +381,24 @@ class _BabyMonitorPageState extends State<BabyMonitorPage> {
           const SizedBox(width: 8),
         ],
       ),
-      body: StreamBuilder<DatabaseEvent>(
-        stream: _monitorStream,
-        builder: (context, snapshot) {
-          if (snapshot.hasError) {
-            return _ErrorState(message: snapshot.error.toString());
+      body: Builder(
+        builder: (context) {
+          if (_error != null) {
+            return _ErrorState(message: _error.toString());
           }
 
-          if (snapshot.connectionState == ConnectionState.waiting) {
+          if (_loading) {
             return const _LoadingState();
           }
 
-          final event = snapshot.data;
-          if (event == null || event.snapshot.value == null) {
+          final readings = _readings;
+          if (readings == null) {
             return const _EmptyState();
           }
 
-          final readings = BabyMonitorReadings.fromSnapshot(
-            event.snapshot,
-            receivedAt: DateTime.now(),
-          );
           return BabyMonitorView(
             readings: readings,
+            todayActivities: _todayActivities,
             manualCameraOverride: _manualCameraUrl,
             onRequestManualCameraUrl: () => _promptManualCameraUrl(
               initialValue:
@@ -208,12 +464,14 @@ class BabyMonitorView extends StatelessWidget {
   const BabyMonitorView({
     super.key,
     required this.readings,
+    required this.todayActivities,
     this.manualCameraOverride,
     this.onRequestManualCameraUrl,
     this.onClearManualCameraUrl,
   });
 
   final BabyMonitorReadings readings;
+  final List<ActivityEvent> todayActivities;
   final String? manualCameraOverride;
   final VoidCallback? onRequestManualCameraUrl;
   final VoidCallback? onClearManualCameraUrl;
@@ -251,6 +509,8 @@ class BabyMonitorView extends StatelessWidget {
         ),
         const SizedBox(height: 24),
         SensorGrid(readings: readings),
+        const SizedBox(height: 24),
+        DailyActivityHistoryCard(activities: todayActivities),
         const SizedBox(height: 24),
         MotionStatusCard(
           isMotionDetected: readings.motionDetected,
@@ -427,7 +687,7 @@ class _DashboardHeader extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Nursery Overview',
+          'Baby Overview',
           style: theme.textTheme.headlineMedium?.copyWith(
             fontWeight: FontWeight.w700,
             color: theme.colorScheme.onSurface,
@@ -1203,7 +1463,7 @@ class MotionStatusCard extends StatelessWidget {
         ? 'Monitor offline'
         : alert
         ? 'Motion detected'
-        : 'Nursery is calm';
+        : 'Baby is calm';
 
     final String subtitle = !online
         ? 'Check the monitor power and Wi-Fi connection.'
@@ -1779,3 +2039,229 @@ String _formatRelativeTime(DateTime? timestamp) {
       '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
   return 'Last update $date at $time';
 }
+
+// Activity Event Model
+enum ActivityType { motion, sound, temperature }
+
+class ActivityEvent {
+  final ActivityType type;
+  final DateTime timestamp;
+  final String description;
+
+  ActivityEvent({
+    required this.type,
+    required this.timestamp,
+    required this.description,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'type': type.index,
+        'timestamp': timestamp.toIso8601String(),
+        'description': description,
+      };
+
+  factory ActivityEvent.fromJson(Map<String, dynamic> json) {
+    return ActivityEvent(
+      type: ActivityType.values[json['type'] as int],
+      timestamp: DateTime.parse(json['timestamp'] as String),
+      description: json['description'] as String,
+    );
+  }
+
+  IconData get icon {
+    switch (type) {
+      case ActivityType.motion:
+        return Icons.directions_walk_rounded;
+      case ActivityType.sound:
+        return Icons.volume_up_rounded;
+      case ActivityType.temperature:
+        return Icons.thermostat_rounded;
+    }
+  }
+
+  Color get color {
+    switch (type) {
+      case ActivityType.motion:
+        return const Color(0xFFE94255);
+      case ActivityType.sound:
+        return const Color(0xFFFFA54A);
+      case ActivityType.temperature:
+        return const Color(0xFF6AA6F8);
+    }
+  }
+}
+
+// Daily Activity History Card Widget
+class DailyActivityHistoryCard extends StatelessWidget {
+  const DailyActivityHistoryCard({
+    super.key,
+    required this.activities,
+  });
+
+  final List<ActivityEvent> activities;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  height: 44,
+                  width: 44,
+                  decoration: BoxDecoration(
+                    color: _withOpacityFactor(theme.colorScheme.primary, 0.12),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Icon(
+                    Icons.history_rounded,
+                    color: theme.colorScheme.primary,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Today\'s Activity',
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${activities.length} events recorded',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            if (activities.isEmpty) ...[
+              const SizedBox(height: 20),
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 20),
+                  child: Column(
+                    children: [
+                      Icon(
+                        Icons.check_circle_outline_rounded,
+                        size: 48,
+                        color: theme.colorScheme.outline,
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        'No events today',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ] else ...[
+              const SizedBox(height: 16),
+              const Divider(),
+              const SizedBox(height: 8),
+              ...activities.take(10).map((activity) => _ActivityItem(
+                    activity: activity,
+                  )),
+              if (activities.length > 10) ...[
+                const SizedBox(height: 8),
+                Center(
+                  child: Text(
+                    '+${activities.length - 10} more events',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ActivityItem extends StatelessWidget {
+  const _ActivityItem({required this.activity});
+
+  final ActivityEvent activity;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final timeStr = _formatActivityTime(activity.timestamp);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        children: [
+          Container(
+            height: 36,
+            width: 36,
+            decoration: BoxDecoration(
+              color: _withOpacityFactor(activity.color, 0.12),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(
+              activity.icon,
+              size: 20,
+              color: activity.color,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  activity.description,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  timeStr,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatActivityTime(DateTime timestamp) {
+    final now = DateTime.now();
+    final difference = now.difference(timestamp);
+
+    if (difference.inSeconds < 60) {
+      return 'Just now';
+    } else if (difference.inMinutes < 60) {
+      return '${difference.inMinutes}m ago';
+    } else if (difference.inHours < 24) {
+      return '${difference.inHours}h ago';
+    } else {
+      return '${timestamp.hour.toString().padLeft(2, '0')}:${timestamp.minute.toString().padLeft(2, '0')}';
+    }
+  }
+}
+

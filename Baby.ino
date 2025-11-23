@@ -17,12 +17,12 @@ const int SOUND_ANALOG = 34;
 const int LED_PIN = 2;
 
 // Sound detection tuning
-const int SOUND_THRESHOLD = 700;       // Upper clamp for adaptive trigger
-const int SOUND_MIN_THRESHOLD = 420;   // Never drop below this value
-const int SOUND_TRIGGER_MARGIN = 60;   // Margin added on top of rolling baseline
-const uint8_t SOUND_SAMPLE_COUNT = 12; // More samples for finer granularity
+const int SOUND_THRESHOLD = 85;         // Upper clamp for adaptive trigger (dB)
+const int SOUND_MIN_THRESHOLD = 55;     // Minimum dB to consider as "Loud"
+const int SOUND_TRIGGER_MARGIN = 10;    // Margin added on top of rolling baseline (dB)
+const unsigned long SOUND_SAMPLE_WINDOW = 50; // Sample window width in mS
 const unsigned long SOUND_SNAPSHOT_INTERVAL_MS = 3000;
-const int SOUND_LEVEL_CHANGE_DELTA = 35;
+const int SOUND_LEVEL_CHANGE_DELTA = 5;
 
 // Comfort range targets
 const float TEMP_MIN = 22.0f;
@@ -287,13 +287,39 @@ void handleMotion(unsigned long now)
 
 void handleSound(unsigned long now)
 {
-    int sampleSum = 0;
-    for (uint8_t i = 0; i < SOUND_SAMPLE_COUNT; ++i)
+    unsigned long startMillis = millis();
+    unsigned int signalMax = 0;
+    unsigned int signalMin = 4095;
+    unsigned int sample;
+
+    // Collect data for SOUND_SAMPLE_WINDOW mS
+    while (millis() - startMillis < SOUND_SAMPLE_WINDOW)
     {
-        sampleSum += analogRead(SOUND_ANALOG);
-        delayMicroseconds(150);
+        sample = analogRead(SOUND_ANALOG);
+        if (sample < 4096) // toss out spurious readings
+        {
+            if (sample > signalMax)
+            {
+                signalMax = sample; // save just the max levels
+            }
+            else if (sample < signalMin)
+            {
+                signalMin = sample; // save just the min levels
+            }
+        }
     }
-    lastSoundLevel = sampleSum / SOUND_SAMPLE_COUNT;
+    
+    // Calculate peak-to-peak amplitude
+    unsigned int peakToPeak = signalMax - signalMin;
+
+    // Map to approximate dB
+    // Formula: dB = 44 * log10(P2P) - 46
+    // This maps P2P 100 -> ~42dB, P2P 200 -> ~55dB, P2P 2000 -> ~99dB
+    if (peakToPeak < 10) peakToPeak = 10; // Avoid log(0) or negative results
+    double dbValue = 44.0 * log10(peakToPeak) - 46.0;
+    if (dbValue < 0) dbValue = 0;
+
+    lastSoundLevel = (int)dbValue;
 
     if (!soundBaselineValid)
     {
@@ -302,8 +328,14 @@ void handleSound(unsigned long now)
     }
     else
     {
-        // Smooth baseline tracking so clap spikes stand out clearly
-        soundBaseline = ((soundBaseline * 7) + lastSoundLevel) / 8;
+        // Smooth baseline tracking (noise floor)
+        // If current level is lower than baseline, drop baseline quickly (it was probably a loud noise before)
+        // If current level is higher, raise baseline slowly (adapt to new noise floor)
+        if (lastSoundLevel < soundBaseline) {
+             soundBaseline = ((soundBaseline * 3) + lastSoundLevel) / 4;
+        } else {
+             soundBaseline = ((soundBaseline * 15) + lastSoundLevel) / 16;
+        }
     }
 
     adaptiveSoundTrigger = constrain(soundBaseline + SOUND_TRIGGER_MARGIN, SOUND_MIN_THRESHOLD, SOUND_THRESHOLD);
@@ -321,7 +353,7 @@ void handleSound(unsigned long now)
     if (shouldLog)
     {
         Serial.printf(
-            "Sound level: %d (%s) | baseline %d -> trigger %d%s\n",
+            "Sound dB: %d (%s) | baseline %d -> trigger %d%s\n",
             lastSoundLevel,
             categoryLabel,
             soundBaseline,
@@ -365,23 +397,10 @@ void handleSound(unsigned long now)
 
 SoundCategory determineSoundCategory(int level)
 {
-    const int trigger = max(adaptiveSoundTrigger, SOUND_MIN_THRESHOLD);
-    if (level >= trigger + 350)
-    {
-        return SoundCategory::Extreme;
-    }
-    if (level >= trigger + 120)
-    {
-        return SoundCategory::Loud;
-    }
-    if (level >= trigger - 40)
-    {
-        return SoundCategory::Moderate;
-    }
-    if (level >= trigger - 160)
-    {
-        return SoundCategory::Quiet;
-    }
+    if (level >= 80) return SoundCategory::Extreme;
+    if (level >= 70) return SoundCategory::Loud;
+    if (level >= 60) return SoundCategory::Moderate;
+    if (level >= 40) return SoundCategory::Quiet;
     return SoundCategory::Silent;
 }
 
